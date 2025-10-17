@@ -949,6 +949,27 @@ def apply_mitigation():
             # Align columns
             X_test_encoded = X_test_encoded.reindex(columns=X_train_encoded.columns, fill_value=0)
             
+            # Handle missing values (fill NaN with median for numeric, mode for categorical)
+            from sklearn.impute import SimpleImputer
+            
+            # Impute numeric columns with median
+            numeric_cols = X_train_encoded.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) > 0:
+                imputer_numeric = SimpleImputer(strategy='median')
+                X_train_encoded[numeric_cols] = imputer_numeric.fit_transform(X_train_encoded[numeric_cols])
+                X_test_encoded[numeric_cols] = imputer_numeric.transform(X_test_encoded[numeric_cols])
+            
+            # Impute categorical columns with most frequent
+            categorical_cols = X_train_encoded.select_dtypes(exclude=[np.number]).columns
+            if len(categorical_cols) > 0:
+                imputer_categorical = SimpleImputer(strategy='most_frequent')
+                X_train_encoded[categorical_cols] = imputer_categorical.fit_transform(X_train_encoded[categorical_cols])
+                X_test_encoded[categorical_cols] = imputer_categorical.transform(X_test_encoded[categorical_cols])
+            
+            # Convert to numpy arrays
+            X_train_encoded = X_train_encoded.values
+            X_test_encoded = X_test_encoded.values
+            
             # Train BEFORE model (without weights)
             model_before = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
             model_before.fit(X_train_encoded, y_train)
@@ -959,7 +980,7 @@ def apply_mitigation():
                 np.array(y_test),
                 y_pred_before,
                 np.array(sensitive_test),
-                X_test_encoded.values
+                X_test_encoded
             )
             
             # Train AFTER model (with weights)
@@ -986,7 +1007,7 @@ def apply_mitigation():
                 np.array(y_test),
                 y_pred_after,
                 np.array(sensitive_test),
-                X_test_encoded.values
+                X_test_encoded
             )
             
             # Calculate comprehensive improvement
