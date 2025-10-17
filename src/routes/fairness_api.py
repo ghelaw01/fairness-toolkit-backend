@@ -798,7 +798,7 @@ def export_report():
 
 # ========== BIAS MITIGATION ENDPOINTS ==========
 
-@fairness_bp.route("/mitigation/recommendations", methods=["POST"])
+@fairness_bp.route("/mitigate/recommend", methods=["POST"])
 def get_mitigation_recommendations_endpoint():
     """Get intelligent recommendations for bias mitigation techniques."""
     try:
@@ -816,7 +816,7 @@ def get_mitigation_recommendations_endpoint():
         return jsonify({"error": f"Error generating recommendations: {e}", "traceback": traceback.format_exc()}), 500
 
 
-@fairness_bp.route("/mitigation/apply", methods=["POST"])
+@fairness_bp.route("/mitigate/apply", methods=["POST"])
 def apply_mitigation():
     """Apply a bias mitigation technique to the data."""
     try:
@@ -898,7 +898,7 @@ def apply_mitigation():
         return jsonify({"error": f"Error applying mitigation: {e}", "traceback": traceback.format_exc()}), 500
 
 
-@fairness_bp.route("/mitigation/compare", methods=["POST"])
+@fairness_bp.route("/mitigate/compare", methods=["POST"])
 def compare_mitigation_results():
     """Compare fairness metrics before and after mitigation."""
     try:
