@@ -1117,25 +1117,45 @@ def explain_with_multiple_counterfactuals():
 def generate_report():
     """Generate a comprehensive fairness report."""
     try:
-        from ..reporting import generate_fairness_pdf_report
+        from ..reporting import generate_stakeholder_report
         
         data = request.get_json()
+        stakeholder_type = data.get("stakeholder_type", "executive")
+        
+        # Get analysis results
+        results = analysis_data.get("results", {})
         
         # Compile all analysis results
         analysis_results = {
             "dataset_name": analysis_data.get("filename", "Unknown"),
-            "target_column": analysis_data.get("target_column", "Unknown"),
-            "sensitive_attr": data.get("sensitive_attr", "Unknown"),
-            "fairness_metrics": data.get("fairness_metrics", {}),
-            "mitigation_recommendations": data.get("mitigation_recommendations", {})
+            "target_column": results.get("model_performance", {}).get("target_column", "Unknown"),
+            "sensitive_attributes": results.get("model_performance", {}).get("sensitive_attributes", []),
+            "sensitive_attr": data.get("sensitive_attr", results.get("model_performance", {}).get("sensitive_attributes", ["Unknown"])[0] if results.get("model_performance", {}).get("sensitive_attributes") else "Unknown"),
+            "model_performance": results.get("model_performance", {}),
+            "fairness_analysis": results.get("fairness_analysis", {}),
+            "bias_detection_details": results.get("bias_detection_details", {}),
+            "explainability": results.get("explainability", {}),
+            "data_summary": results.get("data_summary", {}),
+            "mitigation_recommendations": data.get("mitigation_recommendations", []),
+            "mitigation_info": model_cache.get("mitigation_info", {})
         }
         
-        report_content = generate_fairness_pdf_report(analysis_results)
+        # Get before/after metrics if mitigation was applied
+        before_metrics = model_cache.get("before_metrics")
+        after_metrics = model_cache.get("after_metrics")
+        
+        report_content = generate_stakeholder_report(
+            analysis_results, 
+            stakeholder_type=stakeholder_type,
+            before_metrics=before_metrics,
+            after_metrics=after_metrics
+        )
         
         return jsonify({
             "report": report_content,
             "format": "markdown",
-            "message": "Report generated successfully"
+            "stakeholder_type": stakeholder_type,
+            "message": f"{stakeholder_type.title()} report generated successfully"
         })
         
     except Exception as e:
@@ -1180,4 +1200,69 @@ def export_data(format):
             
     except Exception as e:
         return jsonify({"error": f"Error exporting data: {e}", "traceback": traceback.format_exc()}), 500
+
+
+
+
+@fairness_bp.route("/export/mitigated", methods=["POST"])
+def export_mitigated():
+    """Export dataset with original and mitigated predictions."""
+    try:
+        from ..reporting import export_mitigated_data
+        from flask import send_file
+        
+        # Check if mitigation was applied
+        if "mitigated_predictions" not in model_cache:
+            return jsonify({"error": "No mitigation has been applied. Please apply a mitigation technique first."}), 400
+        
+        # Get the data
+        df = analysis_data.get("df")
+        if df is None:
+            return jsonify({"error": "No data available. Please run analysis first."}), 400
+        
+        # Get predictions
+        y_pred = model_cache.get("y_pred", [])
+        mitigated_pred = model_cache.get("mitigated_predictions", [])
+        
+        # Get test indices to filter the dataframe
+        # Since we only have predictions for test set, we need to align them
+        # For now, export the test set with predictions
+        X_test = model_cache.get("X_test", [])
+        
+        if len(X_test) > 0 and len(y_pred) == len(X_test):
+            # Create a dataframe with test data and predictions
+            import pandas as pd
+            import numpy as np
+            
+            # Get test data
+            y_test = model_cache.get("y_test", [])
+            sensitive_test = model_cache.get("sensitive_test", {})
+            
+            # Create export dataframe
+            export_df = pd.DataFrame(X_test, columns=model_cache.get("X_columns", []))
+            export_df['actual_outcome'] = y_test
+            export_df['original_prediction'] = y_pred
+            export_df['mitigated_prediction'] = mitigated_pred
+            export_df['prediction_changed'] = np.array(y_pred) != np.array(mitigated_pred)
+            
+            # Add sensitive attributes
+            for attr, values in sensitive_test.items():
+                export_df[f'{attr}_protected'] = values
+            
+            # Convert to CSV
+            buffer = io.StringIO()
+            export_df.to_csv(buffer, index=False)
+            content = buffer.getvalue().encode('utf-8')
+            
+            return send_file(
+                io.BytesIO(content),
+                mimetype='text/csv',
+                as_attachment=True,
+                download_name='mitigated_data.csv'
+            )
+        else:
+            return jsonify({"error": "Test data not available for export"}), 400
+            
+    except Exception as e:
+        return jsonify({"error": f"Error exporting mitigated data: {e}", "traceback": traceback.format_exc()}), 500
 

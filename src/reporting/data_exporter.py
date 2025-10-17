@@ -57,3 +57,24 @@ def export_to_excel(data: Dict, filename: str = "fairness_results.xlsx") -> byte
 def export_to_json(data: Dict) -> bytes:
     """Export all results to JSON."""
     return json.dumps(data, indent=2).encode('utf-8')
+
+
+def export_mitigated_data(original_data: pd.DataFrame, predictions: list, 
+                          mitigated_predictions: list = None, 
+                          sensitive_attr: str = None) -> bytes:
+    """Export dataset with original and mitigated predictions."""
+    
+    # Create a copy of the data
+    df = original_data.copy()
+    
+    # Add predictions
+    df['original_prediction'] = predictions
+    
+    if mitigated_predictions:
+        df['mitigated_prediction'] = mitigated_predictions
+        df['prediction_changed'] = df['original_prediction'] != df['mitigated_prediction']
+    
+    # Convert to CSV
+    buffer = io.StringIO()
+    df.to_csv(buffer, index=False)
+    return buffer.getvalue().encode('utf-8')
