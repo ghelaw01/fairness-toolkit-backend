@@ -73,6 +73,25 @@ def _spread(d: Dict[str, float]) -> float:
     vals = list(d.values())
     return float(max(vals) - min(vals)) if vals else 0.0
 
+def _convert_numpy_types(obj):
+    """Recursively convert numpy types to Python native types for JSON serialization."""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, dict):
+        return {key: _convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [_convert_numpy_types(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(_convert_numpy_types(item) for item in obj)
+    else:
+        return obj
+
 def _group_rates(y_true: np.ndarray, y_pred: np.ndarray, sensitive: np.ndarray, X: Optional[np.ndarray] = None) -> Dict:
     """Calculate comprehensive fairness metrics using the new metrics calculator."""
     from ..comprehensive_fairness_metrics import calculate_comprehensive_fairness_metrics
@@ -1023,15 +1042,17 @@ def apply_mitigation():
             model_cache["before_metrics"] = before_metrics
             model_cache["after_metrics"] = after_metrics
             
-            return jsonify({
+            # Convert numpy types to Python native types for JSON serialization
+            response_data = {
                 "success": True,
-                "info": result["info"],
-                "predictions": result["predictions"],
-                "improvement": improvement,
-                "before_metrics": before_metrics,
-                "after_metrics": after_metrics,
+                "info": _convert_numpy_types(result["info"]),
+                "predictions": _convert_numpy_types(result["predictions"]),
+                "improvement": _convert_numpy_types(improvement),
+                "before_metrics": _convert_numpy_types(before_metrics),
+                "after_metrics": _convert_numpy_types(after_metrics),
                 "message": "Postprocessing mitigation applied successfully."
-            })
+            }
+            return jsonify(response_data)
         
         else:
             return jsonify({"error": f"Unknown technique_type: {technique_type}"}), 400
