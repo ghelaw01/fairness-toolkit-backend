@@ -889,20 +889,53 @@ def apply_mitigation():
             
             sensitive_attr = np.array(model_cache["sensitive_test"][sensitive_attr_name])
             
+            # Calculate BEFORE metrics (original predictions)
+            y_pred_original = (y_pred_proba >= 0.5).astype(int)
+            before_metrics = _group_rates(y_true, y_pred_original, sensitive_attr)
+            
             # Apply mitigation
             result = apply_postprocessing_mitigation(
                 y_true, y_pred_proba, sensitive_attr, technique,
                 **data.get("parameters", {})
             )
             
+            # Calculate AFTER metrics (mitigated predictions)
+            y_pred_mitigated = np.array(result["predictions"])
+            after_metrics = _group_rates(y_true, y_pred_mitigated, sensitive_attr)
+            
+            # Calculate improvement
+            improvement = {
+                "before": {
+                    "selection_rate_disparity": before_metrics["disparities"]["selection_rate_diff"],
+                    "tpr_disparity": before_metrics["disparities"]["tpr_diff"],
+                    "fpr_disparity": before_metrics["disparities"]["fpr_diff"]
+                },
+                "after": {
+                    "selection_rate_disparity": after_metrics["disparities"]["selection_rate_diff"],
+                    "tpr_disparity": after_metrics["disparities"]["tpr_diff"],
+                    "fpr_disparity": after_metrics["disparities"]["fpr_diff"]
+                },
+                "improvement": {
+                    "selection_rate": before_metrics["disparities"]["selection_rate_diff"] - after_metrics["disparities"]["selection_rate_diff"],
+                    "tpr": before_metrics["disparities"]["tpr_diff"] - after_metrics["disparities"]["tpr_diff"],
+                    "fpr": before_metrics["disparities"]["fpr_diff"] - after_metrics["disparities"]["fpr_diff"]
+                },
+                "plain_language": f"Selection rate disparity reduced by {(before_metrics['disparities']['selection_rate_diff'] - after_metrics['disparities']['selection_rate_diff'])*100:.1f} percentage points. TPR disparity reduced by {(before_metrics['disparities']['tpr_diff'] - after_metrics['disparities']['tpr_diff'])*100:.1f} percentage points."
+            }
+            
             # Store mitigated predictions
             model_cache["mitigated_predictions"] = result["predictions"]
             model_cache["mitigation_info"] = result["info"]
+            model_cache["before_metrics"] = before_metrics
+            model_cache["after_metrics"] = after_metrics
             
             return jsonify({
                 "success": True,
                 "info": result["info"],
                 "predictions": result["predictions"],
+                "improvement": improvement,
+                "before_metrics": before_metrics,
+                "after_metrics": after_metrics,
                 "message": "Postprocessing mitigation applied successfully."
             })
         
