@@ -793,3 +793,343 @@ def export_report():
         return jsonify({"report": "\n".join(md), "format": "markdown"})
     except Exception as e:
         return jsonify({"error": f"Error generating report: {e}", "traceback": traceback.format_exc()}), 500
+
+
+
+# ========== BIAS MITIGATION ENDPOINTS ==========
+
+@fairness_bp.route("/mitigation/recommendations", methods=["POST"])
+def get_mitigation_recommendations_endpoint():
+    """Get intelligent recommendations for bias mitigation techniques."""
+    try:
+        from ..mitigation import get_mitigation_recommendations
+        
+        data = request.get_json()
+        fairness_metrics = data.get("fairness_metrics", {})
+        data_info = data.get("data_info", {})
+        use_case = data.get("use_case", "general")
+        
+        recommendations = get_mitigation_recommendations(fairness_metrics, data_info, use_case)
+        
+        return jsonify(recommendations)
+    except Exception as e:
+        return jsonify({"error": f"Error generating recommendations: {e}", "traceback": traceback.format_exc()}), 500
+
+
+@fairness_bp.route("/mitigation/apply", methods=["POST"])
+def apply_mitigation():
+    """Apply a bias mitigation technique to the data."""
+    try:
+        from ..mitigation import apply_preprocessing_mitigation, apply_postprocessing_mitigation
+        
+        data = request.get_json()
+        technique = data.get("technique")
+        technique_type = data.get("technique_type")
+        
+        if technique_type == "preprocessing":
+            # Get data from analysis_data
+            if "df" not in analysis_data or "target_column" not in analysis_data:
+                return jsonify({"error": "No data loaded. Please run analysis first."}), 400
+            
+            df = analysis_data["df"]
+            target_column = analysis_data["target_column"]
+            sensitive_attr = data.get("sensitive_attr")
+            
+            if not sensitive_attr:
+                return jsonify({"error": "sensitive_attr is required for preprocessing"}), 400
+            
+            # Prepare data
+            X = df.drop(columns=[target_column])
+            y = df[target_column]
+            
+            # Apply mitigation
+            result = apply_preprocessing_mitigation(
+                X, y, sensitive_attr, technique,
+                **data.get("parameters", {})
+            )
+            
+            # Store mitigated data
+            analysis_data["mitigated_X"] = result["X"]
+            analysis_data["mitigated_y"] = result["y"]
+            analysis_data["mitigation_weights"] = result.get("weights")
+            analysis_data["mitigation_info"] = result["info"]
+            
+            return jsonify({
+                "success": True,
+                "info": result["info"],
+                "message": "Preprocessing mitigation applied successfully. You can now retrain your model with the mitigated data."
+            })
+        
+        elif technique_type == "postprocessing":
+            # Get predictions from model_cache
+            if "y_test" not in model_cache or "y_pred_proba" not in model_cache:
+                return jsonify({"error": "No model predictions available. Please run analysis first."}), 400
+            
+            y_true = np.array(model_cache["y_test"])
+            y_pred_proba = np.array(model_cache["y_pred_proba"])
+            
+            sensitive_attr_data = data.get("sensitive_attr_data")
+            if not sensitive_attr_data:
+                return jsonify({"error": "sensitive_attr_data is required for postprocessing"}), 400
+            
+            sensitive_attr = np.array(sensitive_attr_data)
+            
+            # Apply mitigation
+            result = apply_postprocessing_mitigation(
+                y_true, y_pred_proba, sensitive_attr, technique,
+                **data.get("parameters", {})
+            )
+            
+            # Store mitigated predictions
+            model_cache["mitigated_predictions"] = result["predictions"]
+            model_cache["mitigation_info"] = result["info"]
+            
+            return jsonify({
+                "success": True,
+                "info": result["info"],
+                "predictions": result["predictions"],
+                "message": "Postprocessing mitigation applied successfully."
+            })
+        
+        else:
+            return jsonify({"error": f"Unknown technique_type: {technique_type}"}), 400
+            
+    except Exception as e:
+        return jsonify({"error": f"Error applying mitigation: {e}", "traceback": traceback.format_exc()}), 500
+
+
+@fairness_bp.route("/mitigation/compare", methods=["POST"])
+def compare_mitigation_results():
+    """Compare fairness metrics before and after mitigation."""
+    try:
+        from ..fairness_metrics import (
+            demographic_parity,
+            equal_opportunity,
+            equalized_odds,
+            predictive_parity
+        )
+        
+        data = request.get_json()
+        
+        # Get original metrics
+        if "y_test" not in model_cache or "y_pred" not in model_cache:
+            return jsonify({"error": "No original predictions available"}), 400
+        
+        y_true = np.array(model_cache["y_test"])
+        y_pred_original = np.array(model_cache["y_pred"])
+        
+        # Get mitigated predictions
+        if "mitigated_predictions" not in model_cache:
+            return jsonify({"error": "No mitigated predictions available. Apply mitigation first."}), 400
+        
+        y_pred_mitigated = np.array(model_cache["mitigated_predictions"])
+        if len(y_pred_mitigated) != len(y_true):
+            y_pred_mitigated = (y_pred_mitigated > 0.5).astype(int)
+        
+        sensitive_attr_data = data.get("sensitive_attr_data")
+        if not sensitive_attr_data:
+            return jsonify({"error": "sensitive_attr_data is required"}), 400
+        
+        sensitive_attr = np.array(sensitive_attr_data)
+        
+        # Calculate metrics for both
+        def calc_metrics(y_pred):
+            return {
+                "demographic_parity": demographic_parity(y_true, y_pred, sensitive_attr),
+                "equal_opportunity": equal_opportunity(y_true, y_pred, sensitive_attr),
+                "equalized_odds": equalized_odds(y_true, y_pred, sensitive_attr),
+                "predictive_parity": predictive_parity(y_true, y_pred, sensitive_attr),
+                "accuracy": float(accuracy_score(y_true, y_pred))
+            }
+        
+        original_metrics = calc_metrics(y_pred_original)
+        mitigated_metrics = calc_metrics(y_pred_mitigated)
+        
+        # Calculate improvements
+        improvements = {
+            "demographic_parity_improvement": abs(original_metrics["demographic_parity"]["difference"]) - abs(mitigated_metrics["demographic_parity"]["difference"]),
+            "equal_opportunity_improvement": abs(original_metrics["equal_opportunity"]["difference"]) - abs(mitigated_metrics["equal_opportunity"]["difference"]),
+            "accuracy_change": mitigated_metrics["accuracy"] - original_metrics["accuracy"]
+        }
+        
+        return jsonify({
+            "original": original_metrics,
+            "mitigated": mitigated_metrics,
+            "improvements": improvements,
+            "summary": {
+                "fairness_improved": improvements["demographic_parity_improvement"] > 0,
+                "accuracy_maintained": improvements["accuracy_change"] > -0.05,
+                "recommendation": "Mitigation successful!" if improvements["demographic_parity_improvement"] > 0 and improvements["accuracy_change"] > -0.05 else "Consider trying a different technique"
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({"error": f"Error comparing results: {e}", "traceback": traceback.format_exc()}), 500
+
+
+
+
+
+# ========== ENHANCED EXPLAINABILITY ENDPOINTS ==========
+
+@fairness_bp.route("/explain/lime", methods=["POST"])
+def explain_with_lime():
+    """Generate LIME explanation for a specific instance."""
+    try:
+        from ..explainability import generate_lime_explanation
+        
+        data = request.get_json()
+        instance_idx = data.get("instance_idx", 0)
+        num_features = data.get("num_features", 10)
+        
+        if "model" not in model_cache or "X_test" not in model_cache:
+            return jsonify({"error": "No model available. Please run analysis first."}), 400
+        
+        model = model_cache["model"]
+        X_train = model_cache.get("X_train")
+        X_test = model_cache["X_test"]
+        feature_names = model_cache.get("feature_names", [])
+        
+        explanation = generate_lime_explanation(
+            model, X_train, X_test, instance_idx, feature_names, num_features=num_features
+        )
+        
+        return jsonify(explanation)
+        
+    except Exception as e:
+        return jsonify({"error": f"Error generating LIME explanation: {e}", "traceback": traceback.format_exc()}), 500
+
+
+@fairness_bp.route("/explain/counterfactual", methods=["POST"])
+def explain_with_counterfactual():
+    """Generate counterfactual explanation for a specific instance."""
+    try:
+        from ..explainability import generate_counterfactual_explanation
+        
+        data = request.get_json()
+        instance_idx = data.get("instance_idx", 0)
+        max_changes = data.get("max_changes", 5)
+        
+        if "model" not in model_cache or "X_test" not in model_cache:
+            return jsonify({"error": "No model available. Please run analysis first."}), 400
+        
+        model = model_cache["model"]
+        X_train = model_cache.get("X_train")
+        X_test = model_cache["X_test"]
+        feature_names = model_cache.get("feature_names", [])
+        
+        instance = X_test[instance_idx]
+        
+        explanation = generate_counterfactual_explanation(
+            model, instance, X_train, feature_names, max_changes=max_changes
+        )
+        
+        return jsonify(explanation)
+        
+    except Exception as e:
+        return jsonify({"error": f"Error generating counterfactual: {e}", "traceback": traceback.format_exc()}), 500
+
+
+@fairness_bp.route("/explain/counterfactuals/multiple", methods=["POST"])
+def explain_with_multiple_counterfactuals():
+    """Generate multiple counterfactual explanations."""
+    try:
+        from ..explainability import generate_multiple_counterfactuals
+        
+        data = request.get_json()
+        instance_idx = data.get("instance_idx", 0)
+        num_counterfactuals = data.get("num_counterfactuals", 3)
+        
+        if "model" not in model_cache or "X_test" not in model_cache:
+            return jsonify({"error": "No model available. Please run analysis first."}), 400
+        
+        model = model_cache["model"]
+        X_train = model_cache.get("X_train")
+        X_test = model_cache["X_test"]
+        feature_names = model_cache.get("feature_names", [])
+        
+        instance = X_test[instance_idx]
+        
+        explanations = generate_multiple_counterfactuals(
+            model, instance, X_train, feature_names, num_counterfactuals=num_counterfactuals
+        )
+        
+        return jsonify(explanations)
+        
+    except Exception as e:
+        return jsonify({"error": f"Error generating counterfactuals: {e}", "traceback": traceback.format_exc()}), 500
+
+
+
+
+
+# ========== REPORTING ENDPOINTS ==========
+
+@fairness_bp.route("/report/generate", methods=["POST"])
+def generate_report():
+    """Generate a comprehensive fairness report."""
+    try:
+        from ..reporting import generate_fairness_pdf_report
+        
+        data = request.get_json()
+        
+        # Compile all analysis results
+        analysis_results = {
+            "dataset_name": analysis_data.get("filename", "Unknown"),
+            "target_column": analysis_data.get("target_column", "Unknown"),
+            "sensitive_attr": data.get("sensitive_attr", "Unknown"),
+            "fairness_metrics": data.get("fairness_metrics", {}),
+            "mitigation_recommendations": data.get("mitigation_recommendations", {})
+        }
+        
+        report_content = generate_fairness_pdf_report(analysis_results)
+        
+        return jsonify({
+            "report": report_content,
+            "format": "markdown",
+            "message": "Report generated successfully"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": f"Error generating report: {e}", "traceback": traceback.format_exc()}), 500
+
+
+@fairness_bp.route("/export/<format>", methods=["POST"])
+def export_data(format):
+    """Export analysis results in specified format (csv, excel, json)."""
+    try:
+        from ..reporting import export_to_csv, export_to_excel, export_to_json
+        from flask import send_file
+        
+        data = request.get_json()
+        
+        if format == 'csv':
+            content = export_to_csv(data)
+            return send_file(
+                io.BytesIO(content),
+                mimetype='text/csv',
+                as_attachment=True,
+                download_name='fairness_results.csv'
+            )
+        elif format == 'excel':
+            content = export_to_excel(data)
+            return send_file(
+                io.BytesIO(content),
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                as_attachment=True,
+                download_name='fairness_results.xlsx'
+            )
+        elif format == 'json':
+            content = export_to_json(data)
+            return send_file(
+                io.BytesIO(content),
+                mimetype='application/json',
+                as_attachment=True,
+                download_name='fairness_results.json'
+            )
+        else:
+            return jsonify({"error": f"Unsupported format: {format}"}), 400
+            
+    except Exception as e:
+        return jsonify({"error": f"Error exporting data: {e}", "traceback": traceback.format_exc()}), 500
+

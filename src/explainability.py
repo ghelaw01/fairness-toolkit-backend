@@ -518,3 +518,198 @@ def explain_model(model: Any, X_train: np.ndarray, X_test: np.ndarray,
     """
     return ModelExplainer(model, X_train, X_test, feature_names, class_names)
 
+
+
+
+# ========== LIME EXPLANATIONS ==========
+
+def generate_lime_explanation(model, X_train, X_test, instance_idx, feature_names, class_names=None, num_features=10):
+    """
+    Generate LIME (Local Interpretable Model-agnostic Explanations) for a specific instance.
+    
+    Args:
+        model: Trained model
+        X_train: Training data
+        X_test: Test data  
+        instance_idx: Index of instance to explain
+        feature_names: List of feature names
+        class_names: List of class names
+        num_features: Number of top features to show
+        
+    Returns:
+        Dictionary with LIME explanation
+    """
+    try:
+        from lime import lime_tabular
+        
+        # Create LIME explainer
+        explainer = lime_tabular.LimeTabularExplainer(
+            X_train,
+            feature_names=feature_names,
+            class_names=class_names or ['0', '1'],
+            mode='classification',
+            discretize_continuous=True
+        )
+        
+        # Get instance
+        instance = X_test[instance_idx]
+        
+        # Generate explanation
+        exp = explainer.explain_instance(
+            instance,
+            model.predict_proba,
+            num_features=num_features
+        )
+        
+        # Extract feature contributions
+        feature_weights = exp.as_list()
+        
+        # Get prediction
+        prediction = model.predict([instance])[0]
+        prediction_proba = model.predict_proba([instance])[0]
+        
+        return {
+            "instance_index": int(instance_idx),
+            "prediction": int(prediction),
+            "prediction_probability": {
+                str(i): float(p) for i, p in enumerate(prediction_proba)
+            },
+            "feature_weights": [
+                {
+                    "feature": fw[0],
+                    "weight": float(fw[1]),
+                    "direction": "increases" if fw[1] > 0 else "decreases"
+                }
+                for fw in feature_weights
+            ],
+            "plain_language": f"This prediction was influenced most by: {', '.join([fw[0].split()[0] for fw in feature_weights[:3]])}",
+            "interpretation": "Positive weights push toward class 1, negative weights push toward class 0"
+        }
+        
+    except Exception as e:
+        return {"error": f"Error generating LIME explanation: {str(e)}"}
+
+
+# ========== COUNTERFACTUAL EXPLANATIONS ==========
+
+def generate_counterfactual_explanation(model, instance, X_train, feature_names, desired_class=None, max_changes=5):
+    """
+    Generate counterfactual explanations showing minimal changes needed for different outcome.
+    
+    Args:
+        model: Trained model
+        instance: Instance to explain (1D array)
+        X_train: Training data for reference
+        feature_names: List of feature names
+        desired_class: Target class (if None, flip current prediction)
+        max_changes: Maximum number of features to change
+        
+    Returns:
+        Dictionary with counterfactual explanation
+    """
+    try:
+        from scipy.optimize import differential_evolution
+        
+        # Get current prediction
+        current_pred = model.predict([instance])[0]
+        target_class = desired_class if desired_class is not None else (1 - current_pred)
+        
+        # Define bounds for each feature (min/max from training data)
+        bounds = [(X_train[:, i].min(), X_train[:, i].max()) for i in range(X_train.shape[1])]
+        
+        # Objective function: minimize distance while achieving target class
+        def objective(x):
+            # Prediction score for target class
+            pred_proba = model.predict_proba([x])[0][target_class]
+            
+            # Distance from original instance (L1 norm)
+            distance = np.sum(np.abs(x - instance))
+            
+            # Number of changed features
+            num_changes = np.sum(np.abs(x - instance) > 1e-6)
+            
+            # Penalize if prediction doesn't match target
+            class_penalty = 0 if pred_proba > 0.5 else 1000
+            
+            # Penalize too many changes
+            change_penalty = max(0, num_changes - max_changes) * 100
+            
+            return distance + class_penalty + change_penalty
+        
+        # Optimize
+        result = differential_evolution(
+            objective,
+            bounds,
+            maxiter=100,
+            seed=42,
+            atol=0.01,
+            tol=0.01
+        )
+        
+        counterfactual = result.x
+        cf_pred = model.predict([counterfactual])[0]
+        cf_proba = model.predict_proba([counterfactual])[0]
+        
+        # Find changed features
+        changes = []
+        for i, (orig, cf, name) in enumerate(zip(instance, counterfactual, feature_names)):
+            if abs(orig - cf) > 1e-6:
+                changes.append({
+                    "feature": name,
+                    "original_value": float(orig),
+                    "counterfactual_value": float(cf),
+                    "change": float(cf - orig),
+                    "change_percentage": float((cf - orig) / (orig + 1e-10) * 100) if orig != 0 else float('inf')
+                })
+        
+        # Sort by magnitude of change
+        changes.sort(key=lambda x: abs(x["change"]), reverse=True)
+        
+        return {
+            "original_prediction": int(current_pred),
+            "counterfactual_prediction": int(cf_pred),
+            "counterfactual_probability": {
+                str(i): float(p) for i, p in enumerate(cf_proba)
+            },
+            "num_changes": len(changes),
+            "changes": changes[:max_changes],
+            "plain_language": f"To change the prediction from {current_pred} to {target_class}, you would need to change {len(changes)} features: " + 
+                            ", ".join([f"{c['feature']}" for c in changes[:3]]),
+            "actionable": len(changes) <= max_changes,
+            "interpretation": "These are the minimal changes needed to achieve a different outcome"
+        }
+        
+    except Exception as e:
+        return {"error": f"Error generating counterfactual: {str(e)}"}
+
+
+def generate_multiple_counterfactuals(model, instance, X_train, feature_names, num_counterfactuals=3):
+    """
+    Generate multiple diverse counterfactual explanations.
+    
+    Args:
+        model: Trained model
+        instance: Instance to explain
+        X_train: Training data
+        feature_names: List of feature names
+        num_counterfactuals: Number of counterfactuals to generate
+        
+    Returns:
+        List of counterfactual explanations
+    """
+    counterfactuals = []
+    
+    for i in range(num_counterfactuals):
+        max_changes = 3 + i  # Vary the number of allowed changes
+        cf = generate_counterfactual_explanation(
+            model, instance, X_train, feature_names, max_changes=max_changes
+        )
+        if "error" not in cf:
+            counterfactuals.append(cf)
+    
+    return {
+        "counterfactuals": counterfactuals,
+        "summary": f"Generated {len(counterfactuals)} alternative scenarios",
+        "plain_language": "Here are different ways to change the outcome, from simplest to more complex"
+    }
+
