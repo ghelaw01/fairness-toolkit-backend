@@ -297,6 +297,7 @@ def run_fairness_analysis():
             return jsonify({"error": f"Unsupported model type: {model_type}"}), 400
 
         y_pred = model.predict(X_test_used)
+        y_pred_proba = model.predict_proba(X_test_used)[:, 1] if hasattr(model, 'predict_proba') else y_pred
         acc = float(accuracy_score(y_test, y_pred))
 
         sens_test = {a: work.loc[idx_test, a].values for a in sens_attrs}
@@ -418,10 +419,19 @@ def run_fairness_analysis():
         }
 
         analysis_data["results"] = results
+        analysis_data["df"] = work  # Store for preprocessing mitigation
+        analysis_data["target_column"] = target
+        analysis_data["sensitive_attrs"] = sens_attrs
+        
         model_cache["model"] = model
         model_cache["scaler"] = scaler
         model_cache["X_columns"] = X_columns
         model_cache["feature_columns_original"] = feats
+        model_cache["y_test"] = y_test.tolist()
+        model_cache["y_pred"] = y_pred.tolist()
+        model_cache["y_pred_proba"] = y_pred_proba.tolist()
+        model_cache["X_test"] = X_test.values.tolist()
+        model_cache["sensitive_test"] = {a: sens_test[a].tolist() for a in sens_attrs}
 
         return jsonify({"message": "Analysis completed successfully", "results": results})
     except Exception as e:
@@ -868,11 +878,16 @@ def apply_mitigation():
             y_true = np.array(model_cache["y_test"])
             y_pred_proba = np.array(model_cache["y_pred_proba"])
             
-            sensitive_attr_data = data.get("sensitive_attr_data")
-            if not sensitive_attr_data:
-                return jsonify({"error": "sensitive_attr_data is required for postprocessing"}), 400
+            # Get sensitive attribute from request or use first stored one
+            sensitive_attr_name = data.get("sensitive_attr")
+            if not sensitive_attr_name:
+                return jsonify({"error": "sensitive_attr is required for postprocessing"}), 400
             
-            sensitive_attr = np.array(sensitive_attr_data)
+            # Get the sensitive attribute values from the stored test data
+            if "sensitive_test" not in model_cache or sensitive_attr_name not in model_cache["sensitive_test"]:
+                return jsonify({"error": f"Sensitive attribute '{sensitive_attr_name}' not found in test data. Please run analysis first."}), 400
+            
+            sensitive_attr = np.array(model_cache["sensitive_test"][sensitive_attr_name])
             
             # Apply mitigation
             result = apply_postprocessing_mitigation(
