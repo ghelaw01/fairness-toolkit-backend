@@ -720,27 +720,35 @@ def calculate_causal_fairness_metrics(y_true: np.ndarray, y_pred: np.ndarray,
 # MAIN CALCULATION FUNCTION
 # ============================================================================
 
-def calculate_comprehensive_fairness_metrics(y_true: np.ndarray, 
-                                            y_pred: np.ndarray,
-                                            sensitive_attr: np.ndarray,
-                                            X: Optional[np.ndarray] = None,
-                                            is_regression: bool = False) -> Dict:
+def calculate_comprehensive_fairness_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    sensitive_attr: np.ndarray,
+    X: Optional[np.ndarray] = None,
+    is_regression: bool = False
+) -> Dict:
     """
     Calculate all comprehensive fairness metrics.
     
     Args:
         y_true: True labels
-        y_pred: Predicted labels/values
-        sensitive_attr: Protected attribute values
-        X: Feature matrix (optional, for individual fairness)
+        y_pred: Predicted labels or values
+        sensitive_attr: Sensitive attribute values
+        X: Feature matrix (optional, for individual fairness metrics)
         is_regression: Whether this is a regression task
     
     Returns:
-        Dictionary of all fairness metrics with definitions
+        Dictionary of all metrics with their values and metadata
     """
     
-    all_metrics = {}
+    # Convert inputs to numpy arrays to handle list inputs from model_cache
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    sensitive_attr = np.asarray(sensitive_attr)
+    if X is not None:
+        X = np.asarray(X)
     
+    all_metrics = {}
     # Classification metrics
     if not is_regression:
         classification_metrics = calculate_classification_metrics(y_true, y_pred, sensitive_attr)
