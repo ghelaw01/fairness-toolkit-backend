@@ -909,18 +909,19 @@ def apply_mitigation():
             
             df = analysis_data["df"]
             target_column = analysis_data["target_column"]
-            sensitive_attr = data.get("sensitive_attr")
+            sensitive_attr_name = data.get("sensitive_attr")
             
-            if not sensitive_attr:
+            if not sensitive_attr_name:
                 return jsonify({"error": "sensitive_attr is required for preprocessing"}), 400
             
             # Prepare data
             X = df.drop(columns=[target_column])
             y = df[target_column]
+            sensitive_attr_values = df[sensitive_attr_name]
             
-            # Apply mitigation
+            # Apply mitigation to get weights
             result = apply_preprocessing_mitigation(
-                X, y, sensitive_attr, technique,
+                X, y, sensitive_attr_name, technique,
                 **data.get("parameters", {})
             )
             
@@ -930,11 +931,119 @@ def apply_mitigation():
             analysis_data["mitigation_weights"] = result.get("weights")
             analysis_data["mitigation_info"] = result["info"]
             
-            return jsonify({
+            # Automatically retrain model with weighted data
+            from sklearn.model_selection import train_test_split
+            from sklearn.ensemble import RandomForestClassifier
+            
+            # Split data
+            X_train, X_test, y_train, y_test = train_test_split(
+                result["X"], result["y"], test_size=0.3, random_state=42
+            )
+            sensitive_train = sensitive_attr_values.iloc[X_train.index] if hasattr(X_train, 'index') else sensitive_attr_values[:len(X_train)]
+            sensitive_test = sensitive_attr_values.iloc[X_test.index] if hasattr(X_test, 'index') else sensitive_attr_values[len(X_train):]
+            
+            # One-hot encode categorical features
+            X_train_encoded = _one_hot_frame(pd.DataFrame(X_train))
+            X_test_encoded = _one_hot_frame(pd.DataFrame(X_test))
+            
+            # Align columns
+            X_test_encoded = X_test_encoded.reindex(columns=X_train_encoded.columns, fill_value=0)
+            
+            # Train BEFORE model (without weights)
+            model_before = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+            model_before.fit(X_train_encoded, y_train)
+            y_pred_before = model_before.predict(X_test_encoded)
+            
+            # Calculate BEFORE metrics
+            before_metrics = _group_rates(
+                np.array(y_test),
+                y_pred_before,
+                np.array(sensitive_test),
+                X_test_encoded.values
+            )
+            
+            # Train AFTER model (with weights)
+            sample_weights = result.get("weights")
+            if sample_weights is not None:
+                # Map weights to training samples
+                train_weights = np.ones(len(X_train))
+                for i, (sens_val, y_val) in enumerate(zip(sensitive_train, y_train)):
+                    weight_key = (str(sens_val), int(y_val))
+                    if weight_key in sample_weights:
+                        train_weights[i] = sample_weights[weight_key]
+                
+                model_after = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+                model_after.fit(X_train_encoded, y_train, sample_weight=train_weights)
+            else:
+                # If no weights, just retrain normally
+                model_after = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+                model_after.fit(X_train_encoded, y_train)
+            
+            y_pred_after = model_after.predict(X_test_encoded)
+            
+            # Calculate AFTER metrics
+            after_metrics = _group_rates(
+                np.array(y_test),
+                y_pred_after,
+                np.array(sensitive_test),
+                X_test_encoded.values
+            )
+            
+            # Calculate comprehensive improvement
+            improvement_details = []
+            plain_language_parts = []
+            
+            for before_item in before_metrics.get("summary", []):
+                metric_name = before_item["Metric Name"]
+                before_value = before_item["Value"]
+                
+                after_item = next((m for m in after_metrics.get("summary", []) if m["Metric Name"] == metric_name), None)
+                if after_item:
+                    after_value = after_item["Value"]
+                    ideal_value = before_item.get("Ideal Value", 0)
+                    
+                    if ideal_value == 0:
+                        improvement_value = before_value - after_value
+                        improved = improvement_value > 0
+                    else:
+                        improvement_value = after_value - before_value
+                        improved = improvement_value > 0
+                    
+                    improvement_details.append({
+                        "metric": metric_name,
+                        "before": before_value,
+                        "after": after_value,
+                        "improvement": improvement_value,
+                        "improved": improved,
+                        "category": before_item.get("Category", "Unknown")
+                    })
+                    
+                    if metric_name in ["Statistical Parity Difference", "Equal Opportunity Difference", "Average Odds Difference"]:
+                        direction = "reduced" if improved else "increased"
+                        plain_language_parts.append(
+                            f"{metric_name} {direction} by {abs(improvement_value)*100:.1f} percentage points"
+                        )
+            
+            improvement = {
+                "comprehensive_improvement": improvement_details,
+                "plain_language": ". ".join(plain_language_parts) if plain_language_parts else "Model retrained with mitigation weights."
+            }
+            
+            # Store in cache
+            model_cache["mitigated_model"] = model_after
+            model_cache["mitigated_predictions"] = y_pred_after.tolist()
+            model_cache["before_metrics"] = before_metrics
+            model_cache["after_metrics"] = after_metrics
+            
+            response_data = {
                 "success": True,
-                "info": result["info"],
-                "message": "Preprocessing mitigation applied successfully. You can now retrain your model with the mitigated data."
-            })
+                "info": _convert_numpy_types(result["info"]),
+                "improvement": _convert_numpy_types(improvement),
+                "before_metrics": _convert_numpy_types(before_metrics),
+                "after_metrics": _convert_numpy_types(after_metrics),
+                "message": "Preprocessing mitigation applied successfully. Model automatically retrained with weighted data."
+            }
+            return jsonify(response_data)
         
         elif technique_type == "postprocessing":
             # Get predictions from model_cache
