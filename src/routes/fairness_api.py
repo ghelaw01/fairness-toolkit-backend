@@ -938,7 +938,8 @@ def apply_mitigation():
             
             # Calculate BEFORE metrics (original predictions)
             y_pred_original = (y_pred_proba >= 0.5).astype(int)
-            before_metrics = _group_rates(y_true, y_pred_original, sensitive_attr)
+            X_test = model_cache.get("X_test")
+            before_metrics = _group_rates(y_true, y_pred_original, sensitive_attr, X_test)
             
             # Apply mitigation
             result = apply_postprocessing_mitigation(
@@ -948,26 +949,72 @@ def apply_mitigation():
             
             # Calculate AFTER metrics (mitigated predictions)
             y_pred_mitigated = np.array(result["predictions"])
-            after_metrics = _group_rates(y_true, y_pred_mitigated, sensitive_attr)
+            after_metrics = _group_rates(y_true, y_pred_mitigated, sensitive_attr, X_test)
             
-            # Calculate improvement
+            # Calculate comprehensive improvement across all metrics
+            improvement_details = []
+            plain_language_parts = []
+            
+            # Compare all metrics from summary
+            for before_item in before_metrics.get("summary", []):
+                metric_name = before_item["Metric Name"]
+                before_value = before_item["Value"]
+                
+                # Find corresponding after metric
+                after_item = next((m for m in after_metrics.get("summary", []) if m["Metric Name"] == metric_name), None)
+                if after_item:
+                    after_value = after_item["Value"]
+                    ideal_value = before_item.get("Ideal Value", 0)
+                    
+                    # Calculate improvement
+                    if ideal_value == 0:  # Difference metrics (lower is better)
+                        improvement_value = before_value - after_value
+                        improved = improvement_value > 0
+                    else:  # Ratio metrics (closer to 1.0 is better)
+                        improvement_value = after_value - before_value
+                        improved = improvement_value > 0
+                    
+                    improvement_details.append({
+                        "metric": metric_name,
+                        "before": before_value,
+                        "after": after_value,
+                        "improvement": improvement_value,
+                        "improved": improved,
+                        "category": before_item.get("Category", "Unknown")
+                    })
+                    
+                    # Add to plain language for key metrics
+                    if metric_name in ["Statistical Parity Difference", "Equal Opportunity Difference", "Average Odds Difference"]:
+                        direction = "reduced" if improved else "increased"
+                        plain_language_parts.append(
+                            f"{metric_name} {direction} by {abs(improvement_value)*100:.1f} percentage points"
+                        )
+            
+            # Build plain language summary
+            if plain_language_parts:
+                plain_language = ". ".join(plain_language_parts[:3]) + "."
+            else:
+                plain_language = "Mitigation applied. Check detailed metrics for improvements."
+            
+            # Keep backward compatibility with old format
             improvement = {
                 "before": {
-                    "selection_rate_disparity": before_metrics["disparities"]["selection_rate_diff"],
-                    "tpr_disparity": before_metrics["disparities"]["tpr_diff"],
-                    "fpr_disparity": before_metrics["disparities"]["fpr_diff"]
+                    "selection_rate_disparity": before_metrics["disparities"].get("selection_rate_diff", 0),
+                    "tpr_disparity": before_metrics["disparities"].get("tpr_diff", 0),
+                    "fpr_disparity": before_metrics["disparities"].get("fpr_diff", 0)
                 },
                 "after": {
-                    "selection_rate_disparity": after_metrics["disparities"]["selection_rate_diff"],
-                    "tpr_disparity": after_metrics["disparities"]["tpr_diff"],
-                    "fpr_disparity": after_metrics["disparities"]["fpr_diff"]
+                    "selection_rate_disparity": after_metrics["disparities"].get("selection_rate_diff", 0),
+                    "tpr_disparity": after_metrics["disparities"].get("tpr_diff", 0),
+                    "fpr_disparity": after_metrics["disparities"].get("fpr_diff", 0)
                 },
                 "improvement": {
-                    "selection_rate": before_metrics["disparities"]["selection_rate_diff"] - after_metrics["disparities"]["selection_rate_diff"],
-                    "tpr": before_metrics["disparities"]["tpr_diff"] - after_metrics["disparities"]["tpr_diff"],
-                    "fpr": before_metrics["disparities"]["fpr_diff"] - after_metrics["disparities"]["fpr_diff"]
+                    "selection_rate": before_metrics["disparities"].get("selection_rate_diff", 0) - after_metrics["disparities"].get("selection_rate_diff", 0),
+                    "tpr": before_metrics["disparities"].get("tpr_diff", 0) - after_metrics["disparities"].get("tpr_diff", 0),
+                    "fpr": before_metrics["disparities"].get("fpr_diff", 0) - after_metrics["disparities"].get("fpr_diff", 0)
                 },
-                "plain_language": f"Selection rate disparity reduced by {(before_metrics['disparities']['selection_rate_diff'] - after_metrics['disparities']['selection_rate_diff'])*100:.1f} percentage points. TPR disparity reduced by {(before_metrics['disparities']['tpr_diff'] - after_metrics['disparities']['tpr_diff'])*100:.1f} percentage points."
+                "plain_language": plain_language,
+                "comprehensive_improvement": improvement_details
             }
             
             # Store mitigated predictions
