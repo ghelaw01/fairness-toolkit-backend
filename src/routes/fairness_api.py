@@ -73,14 +73,19 @@ def _spread(d: Dict[str, float]) -> float:
     vals = list(d.values())
     return float(max(vals) - min(vals)) if vals else 0.0
 
-def _group_rates(y_true: np.ndarray, y_pred: np.ndarray, sensitive: np.ndarray) -> Dict:
+def _group_rates(y_true: np.ndarray, y_pred: np.ndarray, sensitive: np.ndarray, X: Optional[np.ndarray] = None) -> Dict:
+    """Calculate comprehensive fairness metrics using the new metrics calculator."""
+    from ..comprehensive_fairness_metrics import calculate_comprehensive_fairness_metrics
+    
     y_true = np.asarray(y_true).astype(int)
     y_pred = np.asarray(y_pred).astype(int)
-    s = pd.Series(np.asarray(sensitive))
+    s = np.asarray(sensitive)
 
+    # Calculate group-specific rates for backward compatibility
+    s_series = pd.Series(s)
     selection_rate, tpr, fpr = {}, {}, {}
-    for g in s.unique():
-        idx = s == g
+    for g in s_series.unique():
+        idx = s_series == g
         yt, yp = y_true[idx], y_pred[idx]
         if len(yt) == 0:
             continue
@@ -89,21 +94,63 @@ def _group_rates(y_true: np.ndarray, y_pred: np.ndarray, sensitive: np.ndarray) 
         tpr[str(g)] = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
         fpr[str(g)] = float(fp / (fp + tn)) if (fp + tn) > 0 else 0.0
 
+    # Calculate comprehensive fairness metrics
+    comprehensive_metrics = calculate_comprehensive_fairness_metrics(
+        y_true=y_true,
+        y_pred=y_pred,
+        sensitive_attr=s,
+        X=X,
+        is_regression=False
+    )
+    
+    # Build summary with all comprehensive metrics
+    summary = []
+    for metric_key, metric_data in comprehensive_metrics.items():
+        if isinstance(metric_data, dict) and 'value' in metric_data:
+            # Determine if metric passes threshold
+            value = metric_data['value']
+            ideal = metric_data.get('ideal_value', 0)
+            threshold = metric_data.get('threshold', 0.1)
+            category = metric_data.get('category', 'Unknown')
+            
+            # Check if metric is fair
+            if ideal == 0:  # Difference metrics (should be close to 0)
+                is_fair = abs(value) <= threshold
+                status = "✓ Fair" if is_fair else "⚠ Unfair"
+            else:  # Ratio metrics (should be close to 1.0)
+                is_fair = value >= threshold
+                status = "✓ Fair" if is_fair else "⚠ Unfair"
+            
+            summary.append({
+                "Metric Name": metric_data.get('name', metric_key),
+                "Value": value,
+                "Definition": metric_data.get('definition', ''),
+                "Formula": metric_data.get('formula', ''),
+                "Ideal Value": ideal,
+                "Threshold": threshold,
+                "Status": status,
+                "Category": category,
+                "Interpretation": f"{metric_data.get('definition', '')} Current value: {value:.4f}, Threshold: {threshold}"
+            })
+    
+    # Keep old disparities for backward compatibility
     disparities = {
         "selection_rate_diff": _spread(selection_rate),
         "tpr_diff": _spread(tpr),
         "fpr_diff": _spread(fpr),
     }
-    summary = [
-        {"Metric Name": "Selection Rate Disparity (max-min)", "Value": disparities["selection_rate_diff"],
-         "Interpretation": "Gap in predicted positives across groups (smaller is fairer)."},
-        {"Metric Name": "TPR Disparity (max-min)", "Value": disparities["tpr_diff"],
-         "Interpretation": "Gap in true positive rates (smaller is fairer)."},
-        {"Metric Name": "FPR Disparity (max-min)", "Value": disparities["fpr_diff"],
-         "Interpretation": "Gap in false positive rates (smaller is fairer)."},
-    ]
-    return {"groups": {"selection_rate": selection_rate, "tpr": tpr, "fpr": fpr},
-            "disparities": disparities, "summary": summary}
+    
+    # Add comprehensive metrics to disparities
+    for metric_key, metric_data in comprehensive_metrics.items():
+        if isinstance(metric_data, dict) and 'value' in metric_data:
+            disparities[metric_key] = metric_data['value']
+    
+    return {
+        "groups": {"selection_rate": selection_rate, "tpr": tpr, "fpr": fpr},
+        "disparities": disparities,
+        "summary": summary,
+        "comprehensive_metrics": comprehensive_metrics
+    }
 
 def _bias_label(gap: float, low=0.15, high=0.30) -> str:
     return "Low Bias" if gap < low else ("Moderate Bias" if gap < high else "High Bias")
@@ -303,8 +350,8 @@ def run_fairness_analysis():
         sens_test = {a: work.loc[idx_test, a].values for a in sens_attrs}
         sens_all = {a: work[a].values for a in sens_attrs}
 
-        # Fairness (test)
-        fairness_results = {a: _group_rates(y_test, y_pred, sens_test[a]) for a in sens_attrs}
+        # Fairness (test) - pass X_test for individual fairness metrics
+        fairness_results = {a: _group_rates(y_test, y_pred, sens_test[a], X_test.values if hasattr(X_test, 'values') else X_test) for a in sens_attrs}
 
         # Bias details (representation/outcome/prediction + TPR/FPR)
         bias_details = {}
