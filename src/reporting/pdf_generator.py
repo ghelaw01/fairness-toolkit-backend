@@ -108,25 +108,59 @@ def _generate_executive_report(analysis_results: Dict, before_metrics: Optional[
         report.append("## 📊 Mitigation Impact\n\n")
         report.append("**Bias Reduction Results:**\n\n")
         
-        before_disp = before_metrics.get('disparities', {})
-        after_disp = after_metrics.get('disparities', {})
+        # Use comprehensive metrics from summary
+        before_summary = before_metrics.get('summary', [])
+        after_summary = after_metrics.get('summary', [])
         
-        metrics = [
-            ('Selection Rate Disparity', 'selection_rate_diff'),
-            ('True Positive Rate Disparity', 'tpr_diff'),
-            ('False Positive Rate Disparity', 'fpr_diff')
-        ]
-        
-        report.append("| Metric | Before | After | Improvement |\n")
-        report.append("|--------|--------|-------|-------------|\n")
-        
-        for metric_name, metric_key in metrics:
-            before_val = abs(before_disp.get(metric_key, 0))
-            after_val = abs(after_disp.get(metric_key, 0))
-            improvement = before_val - after_val
-            improvement_pct = (improvement / before_val * 100) if before_val > 0 else 0
+        if before_summary and after_summary:
+            report.append("| Metric | Category | Before | After | Change |\n")
+            report.append("|--------|----------|--------|-------|--------|\n")
             
-            report.append(f"| {metric_name} | {before_val*100:.1f}% | {after_val*100:.1f}% | ")
+            # Show key metrics first, then others
+            key_metrics = ["Statistical Parity Difference", "Disparate Impact", "Equal Opportunity Difference", 
+                          "Average Odds Difference", "Predictive Parity Difference"]
+            
+            # Sort: key metrics first, then alphabetically
+            all_metrics = sorted(before_summary, key=lambda x: (
+                0 if x['Metric Name'] in key_metrics else 1,
+                key_metrics.index(x['Metric Name']) if x['Metric Name'] in key_metrics else 0,
+                x['Metric Name']
+            ))
+            
+            for before_item in all_metrics[:15]:  # Show top 15 metrics in executive report
+                metric_name = before_item['Metric Name']
+                before_val = before_item['Value']
+                category = before_item.get('Category', 'Unknown')
+                
+                # Find corresponding after metric
+                after_item = next((m for m in after_summary if m['Metric Name'] == metric_name), None)
+                if after_item:
+                    after_val = after_item['Value']
+                    change = after_val - before_val
+                    change_indicator = "✓" if abs(after_val) < abs(before_val) else "✗"
+                    
+                    report.append(f"| {metric_name} | {category} | {before_val:.4f} | {after_val:.4f} | {change_indicator} {change:+.4f} |\n")
+        else:
+            # Fallback to old format if comprehensive metrics not available
+            before_disp = before_metrics.get('disparities', {})
+            after_disp = after_metrics.get('disparities', {})
+            
+            metrics = [
+                ('Selection Rate Disparity', 'selection_rate_diff'),
+                ('True Positive Rate Disparity', 'tpr_diff'),
+                ('False Positive Rate Disparity', 'fpr_diff')
+            ]
+            
+            report.append("| Metric | Before | After | Improvement |\n")
+            report.append("|--------|--------|-------|-------------|\n")
+            
+            for metric_name, metric_key in metrics:
+                before_val = abs(before_disp.get(metric_key, 0))
+                after_val = abs(after_disp.get(metric_key, 0))
+                improvement = before_val - after_val
+                improvement_pct = (improvement / before_val * 100) if before_val > 0 else 0
+                
+                report.append(f"| {metric_name} | {before_val*100:.1f}% | {after_val*100:.1f}% | ")
             report.append(f"↓ {improvement*100:.1f}% ({improvement_pct:.0f}% reduction) |\n")
         
         report.append("\n")
@@ -193,30 +227,60 @@ def _generate_technical_report(analysis_results: Dict, before_metrics: Optional[
     report.append(f"- Feature Count: {data_summary.get('feature_count', 0)}\n\n")
     
     # Fairness Metrics
-    report.append("## 2. Fairness Metrics Analysis\n\n")
+    report.append("## 2. Comprehensive Fairness Metrics Analysis\n\n")
     
     fairness_analysis = analysis_results.get('fairness_analysis', {})
     for attr, metrics in fairness_analysis.items():
         report.append(f"### Protected Attribute: {attr}\n\n")
         
-        disparities = metrics.get('disparities', {})
+        # Use comprehensive metrics from summary if available
+        summary = metrics.get('summary', [])
         
-        report.append("**Disparity Metrics:**\n\n")
-        report.append("| Metric | Value | Threshold | Status |\n")
-        report.append("|--------|-------|-----------|--------|\n")
-        
-        metric_defs = [
-            ('Selection Rate Difference', 'selection_rate_diff', 0.1),
-            ('TPR Difference (Equal Opportunity)', 'tpr_diff', 0.1),
-            ('FPR Difference (Equalized Odds)', 'fpr_diff', 0.1),
-            ('Demographic Parity Ratio', 'demographic_parity_ratio', 0.8)
-        ]
-        
-        for metric_name, metric_key, threshold in metric_defs:
-            value = disparities.get(metric_key, 0)
-            if 'ratio' in metric_key:
-                status = "✅ Pass" if value >= threshold else "❌ Fail"
-                report.append(f"| {metric_name} | {value:.3f} | ≥{threshold} | {status} |\n")
+        if summary:
+            # Group metrics by category
+            categories = {}
+            for metric in summary:
+                category = metric.get('Category', 'Other')
+                if category not in categories:
+                    categories[category] = []
+                categories[category].append(metric)
+            
+            # Display metrics by category
+            for category, category_metrics in categories.items():
+                report.append(f"**{category} Metrics:**\n\n")
+                report.append("| Metric | Value | Ideal | Threshold | Status |\n")
+                report.append("|--------|-------|-------|-----------|--------|\n")
+                
+                for metric in category_metrics:
+                    name = metric['Metric Name']
+                    value = metric['Value']
+                    ideal = metric.get('Ideal Value', 'N/A')
+                    threshold = metric.get('Threshold', 'N/A')
+                    status = metric.get('Status', 'Unknown')
+                    
+                    report.append(f"| {name} | {value:.4f} | {ideal} | {threshold} | {status} |\n")
+                
+                report.append("\n")
+        else:
+            # Fallback to old format
+            disparities = metrics.get('disparities', {})
+            
+            report.append("**Disparity Metrics:**\n\n")
+            report.append("| Metric | Value | Threshold | Status |\n")
+            report.append("|--------|-------|-----------|--------|\n")
+            
+            metric_defs = [
+                ('Selection Rate Difference', 'selection_rate_diff', 0.1),
+                ('TPR Difference (Equal Opportunity)', 'tpr_diff', 0.1),
+                ('FPR Difference (Equalized Odds)', 'fpr_diff', 0.1),
+                ('Demographic Parity Ratio', 'demographic_parity_ratio', 0.8)
+            ]
+            
+            for metric_name, metric_key, threshold in metric_defs:
+                value = disparities.get(metric_key, 0)
+                if 'ratio' in metric_key:
+                    status = "✅ Pass" if value >= threshold else "❌ Fail"
+                    report.append(f"| {metric_name} | {value:.3f} | ≥{threshold} | {status} |\n")
             else:
                 status = "✅ Pass" if abs(value) <= threshold else "❌ Fail"
                 report.append(f"| {metric_name} | {abs(value):.3f} | ≤{threshold} | {status} |\n")
