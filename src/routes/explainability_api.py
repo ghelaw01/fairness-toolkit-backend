@@ -154,6 +154,20 @@ def explain_individual_prediction():
         if instance_idx < 0 or instance_idx >= len(X_test):
             return jsonify({"error": f"Invalid instance index. Must be between 0 and {len(X_test)-1}"}), 400
         
+        # Validate dimensions
+        n_features_model = model.n_features_in_ if hasattr(model, 'n_features_in_') else len(X_columns)
+        n_features_data = X_test.shape[1] if len(X_test.shape) > 1 else len(X_test[0])
+        
+        if n_features_data != n_features_model:
+            return jsonify({
+                "error": f"Dimension mismatch: X_test has {n_features_data} features, but model expects {n_features_model}. This may be due to data preprocessing issues.",
+                "details": {
+                    "X_test_shape": X_test.shape if hasattr(X_test, 'shape') else [len(X_test), len(X_test[0]) if X_test else 0],
+                    "X_columns_count": len(X_columns),
+                    "model_features": n_features_model
+                }
+            }), 500
+        
         # OPTIMIZATION: Use cached explainer if available
         if "explainer" in shap_cache:
             explainer = shap_cache["explainer"]

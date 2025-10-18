@@ -679,6 +679,10 @@ def run_fairness_analysis():
         analysis_data["target_column"] = target
         analysis_data["sensitive_attrs"] = sens_attrs
         
+        # Clear SHAP cache when new analysis runs (different model/data)
+        from .explainability_api import shap_cache
+        shap_cache.clear()
+        
         model_cache["model"] = model
         model_cache["scaler"] = scaler
         model_cache["X_columns"] = X_columns
@@ -687,6 +691,7 @@ def run_fairness_analysis():
         model_cache["y_pred"] = y_pred.tolist()
         model_cache["y_pred_proba"] = y_pred_proba.tolist()
         model_cache["X_test"] = X_test.values.tolist()
+        model_cache["X_test_df"] = X_test  # Store DataFrame version for debugging
         model_cache["sensitive_test"] = {a: sens_test[a].tolist() for a in sens_attrs}
 
         return jsonify({"message": "Analysis completed successfully", "results": results})
