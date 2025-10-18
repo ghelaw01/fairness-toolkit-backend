@@ -20,6 +20,9 @@ explainability_bp = Blueprint("explainability", __name__)
 # Shared cache with main fairness API
 from .fairness_api import model_cache, analysis_data
 
+# SHAP cache to avoid recomputation
+shap_cache = {}
+
 
 def _convert_numpy_types(obj):
     """Recursively convert numpy types to Python native types for JSON serialization."""
@@ -54,6 +57,7 @@ def get_shap_summary():
     """
     Generate SHAP summary plot showing global feature importance.
     Returns base64 encoded image.
+    OPTIMIZED: Uses sampling and caching for faster computation.
     """
     try:
         if "model" not in model_cache or "X_test" not in model_cache:
@@ -63,19 +67,44 @@ def get_shap_summary():
         X_test = np.array(model_cache["X_test"])
         X_columns = model_cache["X_columns"]
         
-        # Create explainer
-        explainer = ModelExplainer(
-            model=model,
-            X_train=X_test,  # Use test data as reference (already available)
-            X_test=X_test,
-            feature_names=X_columns
-        )
-        
-        # Compute SHAP values
-        shap_values = explainer.compute_shap_values(X_test)
+        # Check if SHAP values are already cached
+        cache_key = "shap_values_full"
+        if cache_key in shap_cache:
+            shap_values = shap_cache[cache_key]
+            X_sample = shap_cache.get("X_sample", X_test)
+        else:
+            # OPTIMIZATION: Sample data for faster computation
+            # Use up to 200 instances (or all if less)
+            max_samples = min(200, len(X_test))
+            if len(X_test) > max_samples:
+                # Random sample for diversity
+                np.random.seed(42)
+                sample_indices = np.random.choice(len(X_test), max_samples, replace=False)
+                X_sample = X_test[sample_indices]
+            else:
+                X_sample = X_test
+            
+            # Create explainer
+            explainer = ModelExplainer(
+                model=model,
+                X_train=X_sample,  # Use sample as reference
+                X_test=X_sample,
+                feature_names=X_columns
+            )
+            
+            # Compute SHAP values
+            shap_values = explainer.compute_shap_values(X_sample)
+            
+            # Cache the results
+            shap_cache[cache_key] = shap_values
+            shap_cache["X_sample"] = X_sample
+            shap_cache["explainer"] = explainer
         
         # Create summary plot
-        fig = explainer.plot_shap_summary(X_test, plot_type='dot', max_display=10)
+        fig = plt.figure(figsize=(10, 6))
+        import shap
+        shap.summary_plot(shap_values, X_sample, feature_names=X_columns, 
+                         max_display=10, show=False)
         img_base64 = _fig_to_base64(fig)
         
         # Also compute mean absolute SHAP values for ranking
@@ -88,6 +117,9 @@ def get_shap_summary():
         return jsonify({
             "summary_plot": img_base64,
             "shap_importance": shap_importance[:10],
+            "samples_used": len(X_sample),
+            "total_samples": len(X_test),
+            "cached": cache_key in shap_cache and cache_key != "shap_values_full",
             "message": "SHAP summary computed successfully"
         })
         
@@ -104,6 +136,7 @@ def explain_individual_prediction():
     """
     Explain a single prediction using SHAP values.
     Expects JSON: {"instance_idx": 0}
+    OPTIMIZED: Uses cached explainer if available.
     """
     try:
         if "model" not in model_cache or "X_test" not in model_cache:
@@ -121,13 +154,20 @@ def explain_individual_prediction():
         if instance_idx < 0 or instance_idx >= len(X_test):
             return jsonify({"error": f"Invalid instance index. Must be between 0 and {len(X_test)-1}"}), 400
         
-        # Create explainer
-        explainer = ModelExplainer(
-            model=model,
-            X_train=X_test,
-            X_test=X_test,
-            feature_names=X_columns
-        )
+        # OPTIMIZATION: Use cached explainer if available
+        if "explainer" in shap_cache:
+            explainer = shap_cache["explainer"]
+        else:
+            # Create new explainer with small sample for speed
+            sample_size = min(100, len(X_test))
+            X_sample = X_test[:sample_size]
+            explainer = ModelExplainer(
+                model=model,
+                X_train=X_sample,
+                X_test=X_test,
+                feature_names=X_columns
+            )
+            shap_cache["explainer"] = explainer
         
         # Get explanation for this instance
         explanation = explainer.explain_instance(instance_idx, X_test)
@@ -191,16 +231,42 @@ def compare_groups_shap():
         sens_values = np.array(sensitive_test[sensitive_attr])
         unique_groups = np.unique(sens_values)
         
-        # Create explainer
-        explainer = ModelExplainer(
-            model=model,
-            X_train=X_test,
-            X_test=X_test,
-            feature_names=X_columns
-        )
-        
-        # Compute SHAP values for all test instances
-        shap_values = explainer.compute_shap_values(X_test)
+        # OPTIMIZATION: Use cached SHAP values if available
+        cache_key = "shap_values_full"
+        if cache_key in shap_cache:
+            shap_values = shap_cache[cache_key]
+            X_sample = shap_cache.get("X_sample", X_test)
+            # Map back to full test set if we used sampling
+            if len(X_sample) < len(X_test):
+                # Use sample indices to map sensitive attributes
+                sample_indices = shap_cache.get("sample_indices", range(len(X_sample)))
+                sens_values = sens_values[sample_indices]
+        else:
+            # Sample for faster computation
+            max_samples = min(200, len(X_test))
+            if len(X_test) > max_samples:
+                np.random.seed(42)
+                sample_indices = np.random.choice(len(X_test), max_samples, replace=False)
+                X_sample = X_test[sample_indices]
+                sens_values = sens_values[sample_indices]
+                shap_cache["sample_indices"] = sample_indices
+            else:
+                X_sample = X_test
+                sample_indices = range(len(X_test))
+            
+            # Create explainer
+            explainer = ModelExplainer(
+                model=model,
+                X_train=X_sample,
+                X_test=X_sample,
+                feature_names=X_columns
+            )
+            
+            # Compute SHAP values
+            shap_values = explainer.compute_shap_values(X_sample)
+            shap_cache[cache_key] = shap_values
+            shap_cache["X_sample"] = X_sample
+            shap_cache["explainer"] = explainer
         
         # Compute mean SHAP values per group
         group_shap = {}
@@ -274,16 +340,43 @@ def get_fairness_aware_features():
         y_pred = np.array(model_cache.get("y_pred", []))
         sensitive_test = model_cache.get("sensitive_test", {})
         
-        # Create explainer
-        explainer = ModelExplainer(
-            model=model,
-            X_train=X_test,
-            X_test=X_test,
-            feature_names=X_columns
-        )
-        
-        # Compute SHAP values
-        shap_values = explainer.compute_shap_values(X_test)
+        # OPTIMIZATION: Use cached SHAP values if available
+        cache_key = "shap_values_full"
+        if cache_key in shap_cache:
+            shap_values = shap_cache[cache_key]
+            X_sample = shap_cache.get("X_sample", X_test)
+            # If we used sampling, adjust sensitive attributes
+            if len(X_sample) < len(X_test):
+                sample_indices = shap_cache.get("sample_indices", range(len(X_sample)))
+                sensitive_test_sampled = {k: np.array(v)[sample_indices] for k, v in sensitive_test.items()}
+                sensitive_test = sensitive_test_sampled
+                X_test = X_sample
+        else:
+            # Sample for faster computation
+            max_samples = min(200, len(X_test))
+            if len(X_test) > max_samples:
+                np.random.seed(42)
+                sample_indices = np.random.choice(len(X_test), max_samples, replace=False)
+                X_sample = X_test[sample_indices]
+                sensitive_test = {k: np.array(v)[sample_indices] for k, v in sensitive_test.items()}
+                X_test = X_sample
+                shap_cache["sample_indices"] = sample_indices
+            else:
+                X_sample = X_test
+            
+            # Create explainer
+            explainer = ModelExplainer(
+                model=model,
+                X_train=X_sample,
+                X_test=X_sample,
+                feature_names=X_columns
+            )
+            
+            # Compute SHAP values
+            shap_values = explainer.compute_shap_values(X_sample)
+            shap_cache[cache_key] = shap_values
+            shap_cache["X_sample"] = X_sample
+            shap_cache["explainer"] = explainer
         
         # Analyze each sensitive attribute
         fairness_aware_analysis = {}
@@ -400,5 +493,54 @@ def get_test_instances():
         return jsonify({
             "error": f"Error retrieving test instances: {str(e)}",
             "traceback": traceback.format_exc()
+        }), 500
+
+
+
+@explainability_bp.route("/clear_cache", methods=["POST"])
+def clear_shap_cache():
+    """
+    Clear SHAP cache to force recomputation.
+    Useful when model or data changes.
+    """
+    try:
+        global shap_cache
+        cache_size = len(shap_cache)
+        shap_cache.clear()
+        
+        return jsonify({
+            "message": f"SHAP cache cleared ({cache_size} items removed)",
+            "cache_cleared": True
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "error": f"Error clearing cache: {str(e)}"
+        }), 500
+
+
+@explainability_bp.route("/cache_status", methods=["GET"])
+def get_cache_status():
+    """
+    Get current cache status and statistics.
+    """
+    try:
+        cache_info = {
+            "cached": "shap_values_full" in shap_cache,
+            "cache_size": len(shap_cache),
+            "has_explainer": "explainer" in shap_cache,
+            "has_shap_values": "shap_values_full" in shap_cache,
+            "has_sample": "X_sample" in shap_cache,
+            "sample_size": len(shap_cache.get("X_sample", [])) if "X_sample" in shap_cache else 0
+        }
+        
+        return jsonify({
+            "cache_status": cache_info,
+            "message": "Cache status retrieved successfully"
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "error": f"Error getting cache status: {str(e)}"
         }), 500
 
