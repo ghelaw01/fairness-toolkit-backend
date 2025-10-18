@@ -74,8 +74,8 @@ def get_shap_summary():
             X_sample = shap_cache.get("X_sample", X_test)
         else:
             # OPTIMIZATION: Sample data for faster computation
-            # Use up to 200 instances (or all if less)
-            max_samples = min(200, len(X_test))
+            # Use up to 50 instances (or all if less) - reduced for free tier performance
+            max_samples = min(50, len(X_test))
             if len(X_test) > max_samples:
                 # Random sample for diversity
                 np.random.seed(42)
@@ -99,6 +99,8 @@ def get_shap_summary():
             shap_cache[cache_key] = shap_values
             shap_cache["X_sample"] = X_sample
             shap_cache["explainer"] = explainer
+            if len(X_test) > max_samples:
+                shap_cache["sample_indices"] = sample_indices
         
         # Create summary plot
         fig = plt.figure(figsize=(10, 6))
@@ -168,23 +170,39 @@ def explain_individual_prediction():
                 }
             }), 500
         
-        # OPTIMIZATION: Use cached explainer if available
-        if "explainer" in shap_cache:
-            explainer = shap_cache["explainer"]
+        # OPTIMIZATION: Use cached SHAP values if available
+        cache_key = "shap_values_full"
+        if cache_key in shap_cache:
+            shap_values = shap_cache[cache_key]
+            X_sample = shap_cache.get("X_sample", X_test)
+            sample_indices = shap_cache.get("sample_indices", range(len(X_sample)))
+            
+            # Find the instance in the sample
+            if instance_idx in sample_indices:
+                sample_idx = list(sample_indices).index(instance_idx)
+                instance_shap = shap_values[sample_idx]
+                instance_data = X_sample[sample_idx]
+            else:
+                # Instance not in sample, use first instance as fallback
+                instance_shap = shap_values[0]
+                instance_data = X_sample[0]
+                instance_idx = sample_indices[0] if len(sample_indices) > 0 else 0
         else:
-            # Create new explainer with small sample for speed
-            sample_size = min(100, len(X_test))
-            X_sample = X_test[:sample_size]
-            explainer = ModelExplainer(
-                model=model,
-                X_train=X_sample,
-                X_test=X_test,
-                feature_names=X_columns
-            )
-            shap_cache["explainer"] = explainer
+            # No cached SHAP values, compute for this instance only
+            explainer = shap.TreeExplainer(model)
+            instance_shap = explainer.shap_values(X_test[instance_idx:instance_idx+1])
+            if isinstance(instance_shap, list):
+                instance_shap = instance_shap[1][0]  # Binary classification
+            else:
+                instance_shap = instance_shap[0]
+            instance_data = X_test[instance_idx]
         
-        # Get explanation for this instance
-        explanation = explainer.explain_instance(instance_idx, X_test)
+        # Build explanation dict
+        explanation = {
+            "instance_idx": int(instance_idx),
+            "shap_values": {feat: float(val) for feat, val in zip(X_columns, instance_shap)},
+            "feature_values": {feat: float(val) for feat, val in zip(X_columns, instance_data)}
+        }
         
         # Add actual vs predicted
         if instance_idx < len(y_test):
@@ -192,9 +210,19 @@ def explain_individual_prediction():
         if instance_idx < len(y_pred):
             explanation["predicted_label"] = int(y_pred[instance_idx])
         
-        # Create waterfall plot
+        # Create waterfall plot using SHAP directly
         try:
-            fig = explainer.plot_instance_explanation(instance_idx, X_test, plot_type='waterfall')
+            import shap
+            fig = plt.figure(figsize=(10, 6))
+            # Create explanation object for waterfall
+            base_value = model.predict_proba(X_test)[:, 1].mean()  # Average prediction
+            shap_exp = shap.Explanation(
+                values=instance_shap,
+                base_values=base_value,
+                data=instance_data,
+                feature_names=X_columns
+            )
+            shap.waterfall_plot(shap_exp, show=False)
             explanation["waterfall_plot"] = _fig_to_base64(fig)
         except Exception as e:
             explanation["waterfall_plot"] = None
@@ -256,8 +284,8 @@ def compare_groups_shap():
                 sample_indices = shap_cache.get("sample_indices", range(len(X_sample)))
                 sens_values = sens_values[sample_indices]
         else:
-            # Sample for faster computation
-            max_samples = min(200, len(X_test))
+            # Sample for faster computation - reduced for free tier
+            max_samples = min(50, len(X_test))
             if len(X_test) > max_samples:
                 np.random.seed(42)
                 sample_indices = np.random.choice(len(X_test), max_samples, replace=False)
@@ -366,8 +394,8 @@ def get_fairness_aware_features():
                 sensitive_test = sensitive_test_sampled
                 X_test = X_sample
         else:
-            # Sample for faster computation
-            max_samples = min(200, len(X_test))
+            # Sample for faster computation - reduced for free tier
+            max_samples = min(50, len(X_test))
             if len(X_test) > max_samples:
                 np.random.seed(42)
                 sample_indices = np.random.choice(len(X_test), max_samples, replace=False)
