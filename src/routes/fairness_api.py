@@ -21,6 +21,18 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, confusion_matrix
 from sklearn.inspection import permutation_importance
 
+# Import data leakage prevention
+try:
+    from src.data_leakage_prevention import get_safe_features, validate_feature_set, detect_leaky_features
+except ImportError:
+    # Fallback if module not found
+    def get_safe_features(df, target, sens, dataset="", auto=True):
+        return [], {}
+    def validate_feature_set(df, target, feats, sens, dataset=""):
+        return True, [], {}
+    def detect_leaky_features(df, target, feats, dataset=""):
+        return [], [], {}
+
 fairness_bp = Blueprint("fairness", __name__)
 analysis_data: Dict[str, object] = {}
 model_cache: Dict[str, object] = {}
@@ -412,12 +424,41 @@ def run_fairness_analysis():
             if a not in df.columns:
                 return jsonify({"error": f"Sensitive attribute '{a}' not found"}), 400
 
+        # Determine dataset name for leakage detection
+        dataset_name = analysis_data.get("data_info", {}).get("filename", "unknown")
+        
         if not feats:
-            numeric = df.select_dtypes(include=[np.number]).columns.tolist()
-            feats = [c for c in numeric if c != target and c not in sens_attrs]
+            # Use safe feature selection to avoid data leakage
+            feats, warnings = get_safe_features(df, target, sens_attrs, dataset_name, auto_select=True)
+            
+            if not feats:
+                # Fallback to old behavior if safe features returns empty
+                numeric = df.select_dtypes(include=[np.number]).columns.tolist()
+                feats = [c for c in numeric if c != target and c not in sens_attrs]
+            
+            # Log warnings about excluded features
+            if warnings:
+                print(f"Feature selection warnings: {warnings}")
+        else:
+            # Validate user-provided features for data leakage
+            is_valid, errors, warnings = validate_feature_set(df, target, feats, sens_attrs, dataset_name)
+            
+            if not is_valid:
+                return jsonify({
+                    "error": "Data leakage detected in feature set",
+                    "details": errors,
+                    "warnings": warnings
+                }), 400
+            
+            if warnings:
+                print(f"Feature validation warnings: {warnings}")
+        
         missing = [c for c in feats if c not in df.columns]
         if missing:
             return jsonify({"error": f"Feature columns not found: {missing}"}), 400
+        
+        if not feats:
+            return jsonify({"error": "No valid features available after removing leaky features. Please specify features manually."}), 400
 
         # Select columns and handle missing values more carefully
         cols = [target] + sens_attrs + feats
