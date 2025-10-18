@@ -254,8 +254,8 @@ def _comprehensive_bias_assessment(comprehensive_metrics: Dict) -> Dict:
             "metric": "Statistical Parity Difference",
             "description": "Measures if different groups receive positive outcomes at similar rates",
             "details": {
-                "statistical_parity": stat_parity.get('Value', 0),
-                "disparate_impact": disparate_impact.get('Value', 0),
+                "statistical_parity": stat_parity_value,
+                "disparate_impact": disparate_impact_value,
             }
         },
         "outcome": {
@@ -265,7 +265,7 @@ def _comprehensive_bias_assessment(comprehensive_metrics: Dict) -> Dict:
             "metric": "Equal Opportunity Difference",
             "description": "Measures if qualified individuals from different groups have equal chances",
             "details": {
-                "equal_opportunity": equal_opp.get('Value', 0),
+                "equal_opportunity": equal_opp_value,
             }
         },
         "prediction": {
@@ -275,7 +275,7 @@ def _comprehensive_bias_assessment(comprehensive_metrics: Dict) -> Dict:
             "metric": "Average Odds Difference",
             "description": "Measures if prediction errors are balanced across groups",
             "details": {
-                "average_odds": avg_odds.get('Value', 0),
+                "average_odds": avg_odds_value,
             }
         },
         "calibration": {
@@ -285,7 +285,7 @@ def _comprehensive_bias_assessment(comprehensive_metrics: Dict) -> Dict:
             "metric": "Predictive Parity Difference",
             "description": "Measures if predictions are equally accurate across groups",
             "details": {
-                "predictive_parity": pred_parity.get('Value', 0),
+                "predictive_parity": pred_parity_value,
             }
         },
         "individual": {
@@ -295,7 +295,7 @@ def _comprehensive_bias_assessment(comprehensive_metrics: Dict) -> Dict:
             "metric": "Consistency",
             "description": "Measures if similar individuals receive similar predictions",
             "details": {
-                "consistency": consistency.get('Value', 0),
+                "consistency": consistency_value,
             }
         },
         "overall": {
@@ -303,7 +303,7 @@ def _comprehensive_bias_assessment(comprehensive_metrics: Dict) -> Dict:
             "value": overall_value,
             "description": "Overall fairness assessment across all metrics",
             "details": {
-                "fairness_gap": fairness_gap.get('Value', 0),
+                "fairness_gap": fairness_gap_value,
             }
         }
     }
