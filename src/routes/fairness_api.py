@@ -172,7 +172,140 @@ def _group_rates(y_true: np.ndarray, y_pred: np.ndarray, sensitive: np.ndarray, 
     }
 
 def _bias_label(gap: float, low=0.15, high=0.30) -> str:
+    """Legacy bias label function (kept for backward compatibility)"""
     return "Low Bias" if gap < low else ("Moderate Bias" if gap < high else "High Bias")
+
+def _comprehensive_bias_assessment(comprehensive_metrics: Dict) -> Dict:
+    """Generate comprehensive bias assessment from metrics."""
+    
+    # Extract key metrics for different bias types
+    summary = comprehensive_metrics.get('summary', [])
+    
+    # Create metric lookup
+    metrics_dict = {m['Metric Name']: m for m in summary}
+    
+    # 1. Representation Bias (Statistical Parity)
+    stat_parity = metrics_dict.get('Statistical Parity Difference', {})
+    disparate_impact = metrics_dict.get('Disparate Impact', {})
+    
+    representation_value = abs(stat_parity.get('Value', 0))
+    representation_status = stat_parity.get('Status', 'Unknown')
+    representation_level = (
+        "Low Bias" if representation_value < 0.1 else
+        "Moderate Bias" if representation_value < 0.2 else
+        "High Bias"
+    )
+    
+    # 2. Outcome Bias (Equal Opportunity)
+    equal_opp = metrics_dict.get('Equal Opportunity Difference', {})
+    outcome_value = abs(equal_opp.get('Value', 0))
+    outcome_status = equal_opp.get('Status', 'Unknown')
+    outcome_level = (
+        "Low Bias" if outcome_value < 0.1 else
+        "Moderate Bias" if outcome_value < 0.2 else
+        "High Bias"
+    )
+    
+    # 3. Prediction Bias (Average Odds)
+    avg_odds = metrics_dict.get('Average Odds Difference', {})
+    prediction_value = abs(avg_odds.get('Value', 0))
+    prediction_status = avg_odds.get('Status', 'Unknown')
+    prediction_level = (
+        "Low Bias" if prediction_value < 0.1 else
+        "Moderate Bias" if prediction_value < 0.2 else
+        "High Bias"
+    )
+    
+    # 4. Calibration Bias
+    pred_parity = metrics_dict.get('Predictive Parity Difference', {})
+    calibration_value = abs(pred_parity.get('Value', 0))
+    calibration_status = pred_parity.get('Status', 'Unknown')
+    calibration_level = (
+        "Low Bias" if calibration_value < 0.05 else
+        "Moderate Bias" if calibration_value < 0.1 else
+        "High Bias"
+    )
+    
+    # 5. Individual Fairness
+    consistency = metrics_dict.get('Consistency', {})
+    individual_value = consistency.get('Value', 1.0)
+    individual_status = consistency.get('Status', 'Unknown')
+    individual_level = (
+        "Low Bias" if individual_value > 0.85 else
+        "Moderate Bias" if individual_value > 0.7 else
+        "High Bias"
+    )
+    
+    # 6. Overall Fairness Score (composite)
+    fairness_gap = metrics_dict.get('Fairness Gap', {})
+    overall_value = abs(fairness_gap.get('Value', 0))
+    overall_level = (
+        "Low Bias" if overall_value < 0.1 else
+        "Moderate Bias" if overall_value < 0.2 else
+        "High Bias"
+    )
+    
+    return {
+        "representation": {
+            "level": representation_level,
+            "value": representation_value,
+            "status": representation_status,
+            "metric": "Statistical Parity Difference",
+            "description": "Measures if different groups receive positive outcomes at similar rates",
+            "details": {
+                "statistical_parity": stat_parity.get('Value', 0),
+                "disparate_impact": disparate_impact.get('Value', 0),
+            }
+        },
+        "outcome": {
+            "level": outcome_level,
+            "value": outcome_value,
+            "status": outcome_status,
+            "metric": "Equal Opportunity Difference",
+            "description": "Measures if qualified individuals from different groups have equal chances",
+            "details": {
+                "equal_opportunity": equal_opp.get('Value', 0),
+            }
+        },
+        "prediction": {
+            "level": prediction_level,
+            "value": prediction_value,
+            "status": prediction_status,
+            "metric": "Average Odds Difference",
+            "description": "Measures if prediction errors are balanced across groups",
+            "details": {
+                "average_odds": avg_odds.get('Value', 0),
+            }
+        },
+        "calibration": {
+            "level": calibration_level,
+            "value": calibration_value,
+            "status": calibration_status,
+            "metric": "Predictive Parity Difference",
+            "description": "Measures if predictions are equally accurate across groups",
+            "details": {
+                "predictive_parity": pred_parity.get('Value', 0),
+            }
+        },
+        "individual": {
+            "level": individual_level,
+            "value": individual_value,
+            "status": individual_status,
+            "metric": "Consistency",
+            "description": "Measures if similar individuals receive similar predictions",
+            "details": {
+                "consistency": consistency.get('Value', 0),
+            }
+        },
+        "overall": {
+            "level": overall_level,
+            "value": overall_value,
+            "description": "Overall fairness assessment across all metrics",
+            "details": {
+                "fairness_gap": fairness_gap.get('Value', 0),
+            }
+        }
+    }
 
 # ---------- endpoints ----------
 
@@ -421,14 +554,29 @@ def run_fairness_analysis():
                 "fpr_data": fpr_data,
             }
 
-        # Bias cards + mirror arrays for convenience
+        # Bias cards with comprehensive assessment
         bias_cards = {}
         for a, fr in fairness_results.items():
-            cards = {
+            # Get comprehensive bias assessment
+            comprehensive_assessment = _comprehensive_bias_assessment(fr.get('comprehensive_metrics', {}))
+            
+            # Legacy simple labels for backward compatibility
+            legacy_labels = {
                 "representation": _bias_label(fr["disparities"]["selection_rate_diff"]),
                 "outcome": _bias_label(fr["disparities"]["tpr_diff"]),
                 "prediction": _bias_label(fr["disparities"]["fpr_diff"]),
-                # mirror arrays:
+            }
+            
+            cards = {
+                # New comprehensive assessment
+                "comprehensive": comprehensive_assessment,
+                
+                # Legacy labels (for backward compatibility)
+                "representation": legacy_labels["representation"],
+                "outcome": legacy_labels["outcome"],
+                "prediction": legacy_labels["prediction"],
+                
+                # Mirror arrays:
                 "representation_data": bias_details[a]["representation_data"],
                 "outcome_bias_data": bias_details[a]["outcome_bias_data"],
                 "prediction_bias_data": bias_details[a]["prediction_bias_data"],
