@@ -15,6 +15,7 @@ import pandas as pd
 from src.models.user import db
 from src.routes.user import user_bp
 from src.routes.fairness_api import fairness_bp
+from src.routes.explainability_api import explainability_bp
 
 
 # -----------------------------------------------------------------------------
@@ -43,6 +44,7 @@ TMPDIR.mkdir(parents=True, exist_ok=True)
 # -----------------------------------------------------------------------------
 app.register_blueprint(user_bp, url_prefix="/api")
 app.register_blueprint(fairness_bp, url_prefix="/api/fairness")
+app.register_blueprint(explainability_bp, url_prefix="/api/explainability")
 
 # -----------------------------------------------------------------------------
 # (Optional) database (your original config)
