@@ -178,70 +178,71 @@ def _bias_label(gap: float, low=0.15, high=0.30) -> str:
 def _comprehensive_bias_assessment(comprehensive_metrics: Dict) -> Dict:
     """Generate comprehensive bias assessment from metrics."""
     
-    # Extract key metrics for different bias types
-    summary = comprehensive_metrics.get('summary', [])
-    
-    # Create metric lookup
-    metrics_dict = {m['Metric Name']: m for m in summary}
+    # Helper to safely get metric value
+    def get_metric_value(key: str, default: float = 0.0) -> float:
+        metric = comprehensive_metrics.get(key, {})
+        if isinstance(metric, dict):
+            return float(metric.get('value', default))
+        return default
     
     # 1. Representation Bias (Statistical Parity)
-    stat_parity = metrics_dict.get('Statistical Parity Difference', {})
-    disparate_impact = metrics_dict.get('Disparate Impact', {})
+    stat_parity_value = abs(get_metric_value('statistical_parity_difference', 0))
+    disparate_impact_value = get_metric_value('disparate_impact', 1.0)
     
-    representation_value = abs(stat_parity.get('Value', 0))
-    representation_status = stat_parity.get('Status', 'Unknown')
+    representation_value = stat_parity_value
+    representation_status = "✓ Fair" if stat_parity_value < 0.1 else "⚠ Unfair"
     representation_level = (
-        "Low Bias" if representation_value < 0.1 else
-        "Moderate Bias" if representation_value < 0.2 else
+        "Low Bias" if stat_parity_value < 0.1 else
+        "Moderate Bias" if stat_parity_value < 0.2 else
         "High Bias"
     )
     
     # 2. Outcome Bias (Equal Opportunity)
-    equal_opp = metrics_dict.get('Equal Opportunity Difference', {})
-    outcome_value = abs(equal_opp.get('Value', 0))
-    outcome_status = equal_opp.get('Status', 'Unknown')
+    equal_opp_value = abs(get_metric_value('equal_opportunity_difference', 0))
+    outcome_value = equal_opp_value
+    outcome_status = "✓ Fair" if equal_opp_value < 0.1 else "⚠ Unfair"
     outcome_level = (
-        "Low Bias" if outcome_value < 0.1 else
-        "Moderate Bias" if outcome_value < 0.2 else
+        "Low Bias" if equal_opp_value < 0.1 else
+        "Moderate Bias" if equal_opp_value < 0.2 else
         "High Bias"
     )
     
     # 3. Prediction Bias (Average Odds)
-    avg_odds = metrics_dict.get('Average Odds Difference', {})
-    prediction_value = abs(avg_odds.get('Value', 0))
-    prediction_status = avg_odds.get('Status', 'Unknown')
+    avg_odds_value = abs(get_metric_value('average_odds_difference', 0))
+    prediction_value = avg_odds_value
+    prediction_status = "✓ Fair" if avg_odds_value < 0.1 else "⚠ Unfair"
     prediction_level = (
-        "Low Bias" if prediction_value < 0.1 else
-        "Moderate Bias" if prediction_value < 0.2 else
+        "Low Bias" if avg_odds_value < 0.1 else
+        "Moderate Bias" if avg_odds_value < 0.2 else
         "High Bias"
     )
     
     # 4. Calibration Bias
-    pred_parity = metrics_dict.get('Predictive Parity Difference', {})
-    calibration_value = abs(pred_parity.get('Value', 0))
-    calibration_status = pred_parity.get('Status', 'Unknown')
+    pred_parity_value = abs(get_metric_value('predictive_parity_difference', 0))
+    calibration_value = pred_parity_value
+    calibration_status = "✓ Fair" if pred_parity_value < 0.05 else "⚠ Unfair"
     calibration_level = (
-        "Low Bias" if calibration_value < 0.05 else
-        "Moderate Bias" if calibration_value < 0.1 else
+        "Low Bias" if pred_parity_value < 0.05 else
+        "Moderate Bias" if pred_parity_value < 0.1 else
         "High Bias"
     )
     
     # 5. Individual Fairness
-    consistency = metrics_dict.get('Consistency', {})
-    individual_value = consistency.get('Value', 1.0)
-    individual_status = consistency.get('Status', 'Unknown')
+    consistency_value = get_metric_value('consistency', 1.0)
+    individual_value = consistency_value
+    individual_status = "✓ Fair" if consistency_value > 0.85 else "⚠ Unfair"
     individual_level = (
-        "Low Bias" if individual_value > 0.85 else
-        "Moderate Bias" if individual_value > 0.7 else
+        "Low Bias" if consistency_value > 0.85 else
+        "Moderate Bias" if consistency_value > 0.7 else
         "High Bias"
     )
     
     # 6. Overall Fairness Score (composite)
-    fairness_gap = metrics_dict.get('Fairness Gap', {})
-    overall_value = abs(fairness_gap.get('Value', 0))
+    fairness_gap_value = abs(get_metric_value('fairness_gap', 0))
+    overall_value = fairness_gap_value
     overall_level = (
-        "Low Bias" if overall_value < 0.1 else
-        "Moderate Bias" if overall_value < 0.2 else
+        "Low Bias" if fairness_gap_value < 0.1 else
+        "Moderate Bias" if fairness_gap_value < 0.2 else
         "High Bias"
     )
     
