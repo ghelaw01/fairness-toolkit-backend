@@ -74,8 +74,8 @@ def get_shap_summary():
             X_sample = shap_cache.get("X_sample", X_test)
         else:
             # OPTIMIZATION: Sample data for faster computation
-            # Use up to 50 instances (or all if less) - reduced for free tier performance
-            max_samples = min(50, len(X_test))
+            # Use up to 20 instances (or all if less) - ultra-reduced for free tier memory constraints
+            max_samples = min(20, len(X_test))
             if len(X_test) > max_samples:
                 # Random sample for diversity
                 np.random.seed(42)
@@ -284,8 +284,8 @@ def compare_groups_shap():
                 sample_indices = shap_cache.get("sample_indices", range(len(X_sample)))
                 sens_values = sens_values[sample_indices]
         else:
-            # Sample for faster computation - reduced for free tier
-            max_samples = min(50, len(X_test))
+            # Sample for faster computation - ultra-reduced for free tier memory
+            max_samples = min(20, len(X_test))
             if len(X_test) > max_samples:
                 np.random.seed(42)
                 sample_indices = np.random.choice(len(X_test), max_samples, replace=False)
@@ -394,8 +394,8 @@ def get_fairness_aware_features():
                 sensitive_test = sensitive_test_sampled
                 X_test = X_sample
         else:
-            # Sample for faster computation - reduced for free tier
-            max_samples = min(50, len(X_test))
+            # Sample for faster computation - ultra-reduced for free tier memory
+            max_samples = min(20, len(X_test))
             if len(X_test) > max_samples:
                 np.random.seed(42)
                 sample_indices = np.random.choice(len(X_test), max_samples, replace=False)
